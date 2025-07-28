@@ -11,7 +11,8 @@ import gymnasium as gym
 from gymnasium import spaces
 import traci
 from stable_baselines3 import DQN
-from stable_baselines3.common.callbacks import BaseCallback
+# from stable_baselines3.common.callbacks import BaseCallback
+from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
 
 # Step 2: Establish path to SUMO (SUMO_HOME)
 if 'SUMO_HOME' in os.environ:
@@ -24,7 +25,7 @@ else:
 Sumo_config = [
     'sumo',  # Use 'sumo' for non-GUI mode
     '-c', 'config/light.sumocfg',  # goes one directory up
-    '--step-length', '0.1',
+    # '--step-length', '0.1',
     '--delay', '1000',
     '--lateral-resolution', '0'
 ]
@@ -36,11 +37,11 @@ class SumoEnv(gym.Env):
         self.config = config
         self.action_space = spaces.Discrete(2)  # 0 = keep phase, 1 = switch phase
         self.observation_space = spaces.Box(low=0, high=np.inf, shape=(7,), dtype=np.float32)  # (q_EB_0, q_EB_1, q_EB_2, q_SB_0, q_SB_1, q_SB_2, current_phase)
-        self.min_green_steps = 100  # 10s for primary green phases (0 and 3)
-        self.min_yellow_steps = 30  # 3s for yellow phases (2 and 5)
-        self.min_pedestrian_steps = 50  # 5s for pedestrian/transition green phases (1 and 4)
+        self.min_green_steps = 5  # 10s for primary green phases (0 and 3)
+        self.min_yellow_steps = 3  # 3s for yellow phases (2 and 5)
+        self.min_pedestrian_steps = 5  # 5s for pedestrian/transition green phases (1 and 4)
         self.step_count = 0
-        self.max_steps = 1800  # Steps per episode
+        self.max_steps = 1000  # Steps per episode
         self.cumulative_reward = 0.0
         self.total_queue = 0.0
         self.last_switch_step = -self.min_green_steps
@@ -182,12 +183,12 @@ class SumoEnv(gym.Env):
     #                 return
     #             # Increment phase by 1 modulo total phases
     #             next_phase = (current_phase + 1) % num_phases
-    #             print(f"Switching from phase {current_phase} to phase {next_phase} at step {self.current_simulation_step}")
+    #             # print(f"Switching from phase {current_phase} to phase {next_phase} at step {self.current_simulation_step}")
     #             traci.trafficlight.setPhase(tls_id, next_phase)
     #             self.last_switch_step = self.current_simulation_step
     #         except traci.exceptions.TraCIException:
     #             print("TraCIException occurred during phase switch")
-    #             pass
+
     
     # Reward function computed using the queue length
     def _get_reward(self, state):
@@ -227,6 +228,7 @@ class EpisodeCallback(BaseCallback):
                 return False  # Stop training
         return True
 
+
 # Step 6: Episode-based Training Loop with Stable Baselines3
 print("\n=== Starting Episode-based Reinforcement Learning (DQN with Stable Baselines3) ===")
 
@@ -234,29 +236,44 @@ print("\n=== Starting Episode-based Reinforcement Learning (DQN with Stable Base
 env = SumoEnv(Sumo_config)
 
 # Check environment compatibility
-from stable_baselines3.common.env_checker import check_env
-check_env(env)
+# from stable_baselines3.common.env_checker import check_env
+# check_env(env)
 
 # Initialize DQN model
 model = DQN(
     policy="MlpPolicy",
     env=env,
-    learning_rate=0.1,  # ALPHA
-    gamma=0.9,          # GAMMA
-    exploration_initial_eps=0.1,  # EPSILON
-    exploration_final_eps=0.1,    # Constant exploration
-    exploration_fraction=1.0,
+    learning_rate=0.0001,  # Fixed: 10e-5 was too low, use 0.0001
+    gamma=0.99,            # Increased from 0.9 to 0.99 for better long-term planning
+    exploration_initial_eps=1,  # Start with 100% exploration
+    exploration_final_eps=0.01,   # End with 1% exploration
+    exploration_fraction=0.3,     # Decay over 30% of training
     verbose=1,
-    learning_starts=0,
-    train_freq=1,
-    batch_size=32,
-    target_update_interval=1000
+    learning_starts=5000,         # Start learning after 1000 steps
+    train_freq=2,                 # Update every 8 steps (balanced)
+    batch_size=128,                # Increased batch size
+    target_update_interval=1000,   # Update target network more frequently
+    buffer_size=100000,           # Larger replay buffer
+    tau=0.01,                      # Hard target update
+    gradient_steps=2              # Gradient steps per update
 )
 
 # Train for exactly 100 episodes
 TOTAL_EPISODES = 100
-callback = EpisodeCallback(env, total_episodes=TOTAL_EPISODES, verbose=1)
-model.learn(total_timesteps=TOTAL_EPISODES * 1500, callback=callback, progress_bar=True)
+episode_callback = EpisodeCallback(env, total_episodes=TOTAL_EPISODES, verbose=1)
+
+eval_env = SumoEnv(Sumo_config)
+eval_callback = EvalCallback(
+    eval_env,
+    best_model_save_path='./logs/best_model',
+    log_path='./logs/results',
+    eval_freq=env.max_steps,
+    n_eval_episodes=1,
+    deterministic=True,
+    render=False
+)
+callbacks = [episode_callback]
+model.learn(total_timesteps=TOTAL_EPISODES * env.max_steps, callback=callbacks, progress_bar=True)
 
 # Save the model
 model.save("dqn_sumo")
@@ -265,6 +282,7 @@ model.save("dqn_sumo")
 np.save("dqn_episode_history.npy", env.episode_history)
 np.save("dqn_reward_history.npy", env.reward_history)
 np.save("dqn_queue_history.npy", env.queue_history)
+
 
 # Close the environment
 env.close()
