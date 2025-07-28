@@ -23,7 +23,7 @@ else:
 Sumo_config = [
     'sumo',
     '-c', 'config/light.sumocfg',
-    '--step-length', '0.1',
+    # '--step-length', '0.1',
     '--delay', '1000',
     '--lateral-resolution', '0'
 ]
@@ -35,9 +35,9 @@ class SumoEnv(gym.Env):
         self.config = config
         self.action_space = spaces.Discrete(2)  # 0 = keep phase, 1 = switch phase
         self.observation_space = spaces.Box(low=0, high=np.inf, shape=(7,), dtype=np.float32)
-        self.min_green_steps = 100
-        self.min_yellow_steps = 30
-        self.min_pedestrian_steps = 50
+        self.min_green_steps = 5
+        self.min_yellow_steps = 3
+        self.min_pedestrian_steps = 5
         self.step_count = 0
         self.max_steps = 1800
         self.cumulative_reward = 0.0
@@ -204,7 +204,7 @@ model = PPO(
     policy="MlpPolicy",
     env=env,
     learning_rate=0.0003,  # Suitable for PPO
-    n_steps=2048,          # Number of steps per rollout
+    n_steps=env.max_steps,          # Number of steps per rollout
     batch_size=64,         # Mini-batch size
     n_epochs=10,           # Number of epochs per update
     gamma=0.99,            # Discount factor
